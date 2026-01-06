@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useAccount, useConnect } from 'wagmi';
+import { useAccount, useConnect, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
@@ -16,15 +16,17 @@ const QUICKMINT_ABI = [
 
 export function QuickMint() {
     // Use wagmi hooks - same as Header for consistent wallet state
-    const { address: account, isConnected } = useAccount();
+    const { address: account, isConnected, connector } = useAccount();
     const { connectors, connectAsync } = useConnect();
+    const { data: walletClient } = useWalletClient();
 
-    // Connect wallet using wagmi
+    // Connect wallet using wagmi - opens wallet modal
     const connect = async () => {
-        const connector = connectors.find(c => c.name !== 'Injected') || connectors[0];
-        if (connector) {
+        // Find the first available connector (prioritize non-Injected for EIP-6963)
+        const targetConnector = connectors.find(c => c.name !== 'Injected') || connectors[0];
+        if (targetConnector) {
             try {
-                await connectAsync({ connector, chainId: 5042002 });
+                await connectAsync({ connector: targetConnector, chainId: 5042002 });
             } catch (err) {
                 console.error('Connect error:', err);
             }
@@ -237,11 +239,14 @@ export function QuickMint() {
         setSuccess('');
 
         try {
-            if (!window.ethereum) {
-                throw new Error('MetaMask not found');
+            // Use wagmi's wallet client to get the provider from the CONNECTED wallet
+            if (!walletClient) {
+                throw new Error('Wallet not connected. Please connect your wallet first.');
             }
 
-            const browserProvider = new ethers.BrowserProvider(window.ethereum);
+            // Get provider from the connected wallet client (works with MetaMask, Rainbow, etc.)
+            const provider = await connector.getProvider();
+            const browserProvider = new ethers.BrowserProvider(provider);
             const freshSigner = await browserProvider.getSigner();
             const signerAddress = await freshSigner.getAddress();
 
