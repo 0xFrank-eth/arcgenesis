@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useWallet } from '../hooks/useWallet';
+import { useAccount, useConnect } from 'wagmi';
 import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
@@ -15,10 +15,21 @@ const QUICKMINT_ABI = [
 ];
 
 export function QuickMint() {
-    const { account, connect } = useWallet();
+    // Use wagmi hooks - same as Header for consistent wallet state
+    const { address: account, isConnected } = useAccount();
+    const { connectors, connectAsync } = useConnect();
 
-    // Derive connection status from account
-    const isConnected = !!account;
+    // Connect wallet using wagmi
+    const connect = async () => {
+        const connector = connectors.find(c => c.name !== 'Injected') || connectors[0];
+        if (connector) {
+            try {
+                await connectAsync({ connector, chainId: 5042002 });
+            } catch (err) {
+                console.error('Connect error:', err);
+            }
+        }
+    };
 
     // Form state
     const [name, setName] = useState('');
