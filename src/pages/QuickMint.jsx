@@ -404,10 +404,6 @@ export function QuickMint() {
                         {/* Mint Info */}
                         <div className="mint-info">
                             <div className="info-row">
-                                <span>Mint Price</span>
-                                <span className="price">{mintPrice} USDC</span>
-                            </div>
-                            <div className="info-row">
                                 <span>Network</span>
                                 <span>Arc Testnet</span>
                             </div>
