@@ -135,9 +135,9 @@ export function QuickMint() {
 
         } catch (err) {
             console.error('IPFS upload error:', err);
-            // DON'T use base64 fallback - it causes gas explosion!
-            // Throw error instead so user knows to retry
-            throw new Error('Image upload failed. Please try again. If the problem persists, try a smaller image.');
+            // Fallback to small base64 if IPFS fails
+            console.log('⚠️ Falling back to base64...');
+            return createBase64Fallback(file);
         }
     };
 
@@ -247,16 +247,6 @@ export function QuickMint() {
             // Get provider from the connected wallet client (works with MetaMask, Rainbow, etc.)
             const provider = await connector.getProvider();
             const browserProvider = new ethers.BrowserProvider(provider);
-
-            // CRITICAL: Check if user is on the correct network (Arc Testnet)
-            const network = await browserProvider.getNetwork();
-            const currentChainId = Number(network.chainId);
-            console.log('Current Chain ID:', currentChainId);
-
-            if (currentChainId !== 5042002) {
-                throw new Error('Wrong network! Please switch to Arc Testnet (Chain ID: 5042002) in your wallet.');
-            }
-
             const freshSigner = await browserProvider.getSigner();
             const signerAddress = await freshSigner.getAddress();
 
