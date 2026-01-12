@@ -7,8 +7,58 @@ const QUICKMINT_ABI = [
     "function getTokenMetadata(uint256 tokenId) external view returns (string name, string description, string image, address creator, uint256 mintedAt)"
 ];
 
+// Alternative IPFS gateways for fallback
+const IPFS_GATEWAYS = [
+    'https://gateway.pinata.cloud/ipfs/',
+    'https://ipfs.io/ipfs/',
+    'https://cloudflare-ipfs.com/ipfs/',
+    'https://dweb.link/ipfs/'
+];
+
+// Convert IPFS URL to use a specific gateway
+const getIPFSUrl = (url, gatewayIndex = 0) => {
+    if (!url) return '';
+    if (url.startsWith('data:')) return url; // base64 images
+
+    // Extract IPFS hash from various URL formats
+    let hash = '';
+    if (url.includes('/ipfs/')) {
+        hash = url.split('/ipfs/')[1];
+    } else if (url.startsWith('ipfs://')) {
+        hash = url.replace('ipfs://', '');
+    } else {
+        return url; // Not an IPFS URL
+    }
+
+    const gateway = IPFS_GATEWAYS[gatewayIndex % IPFS_GATEWAYS.length];
+    return gateway + hash;
+};
+
 // Pagination settings
 const ITEMS_PER_PAGE = 12;
+
+// NFT Image component with fallback gateway support
+function NFTImage({ src, alt }) {
+    const [gatewayIndex, setGatewayIndex] = useState(0);
+    const [hasError, setHasError] = useState(false);
+
+    const handleError = () => {
+        if (gatewayIndex < IPFS_GATEWAYS.length - 1) {
+            // Try next gateway
+            setGatewayIndex(prev => prev + 1);
+        } else {
+            setHasError(true);
+        }
+    };
+
+    const imageUrl = getIPFSUrl(src, gatewayIndex);
+
+    if (hasError) {
+        return <div className="image-error">🖼️ Image unavailable</div>;
+    }
+
+    return <img src={imageUrl} alt={alt} onError={handleError} />;
+}
 
 export function Gallery() {
     const [nfts, setNfts] = useState([]);
@@ -140,7 +190,7 @@ export function Gallery() {
                             {nfts.map((nft) => (
                                 <div key={nft.id} className="nft-card">
                                     <div className="nft-image">
-                                        <img src={nft.image} alt={nft.name} />
+                                        <NFTImage src={nft.image} alt={nft.name} />
                                     </div>
                                     <div className="nft-info">
                                         <h3 className="nft-name">{nft.name}</h3>
