@@ -14,6 +14,46 @@ const QUICKMINT_ABI = [
     "event NFTMinted(uint256 indexed tokenId, address indexed creator, string name, uint256 price)"
 ];
 
+// Alternative IPFS gateways for fallback
+const IPFS_GATEWAYS = [
+    'https://gateway.pinata.cloud/ipfs/',
+    'https://ipfs.io/ipfs/',
+    'https://cloudflare-ipfs.com/ipfs/',
+    'https://dweb.link/ipfs/'
+];
+
+// Convert IPFS URL to use a specific gateway
+const getIPFSUrl = (url, gatewayIndex = 0) => {
+    if (!url) return '';
+    if (url.startsWith('data:')) return url;
+    let hash = '';
+    if (url.includes('/ipfs/')) {
+        hash = url.split('/ipfs/')[1];
+    } else if (url.startsWith('ipfs://')) {
+        hash = url.replace('ipfs://', '');
+    } else {
+        return url;
+    }
+    return IPFS_GATEWAYS[gatewayIndex % IPFS_GATEWAYS.length] + hash;
+};
+
+// NFT Image with fallback gateway support
+function NFTImage({ src, alt }) {
+    const [gatewayIndex, setGatewayIndex] = React.useState(0);
+    const [hasError, setHasError] = React.useState(false);
+
+    const handleError = () => {
+        if (gatewayIndex < IPFS_GATEWAYS.length - 1) {
+            setGatewayIndex(prev => prev + 1);
+        } else {
+            setHasError(true);
+        }
+    };
+
+    if (hasError) return <div className="image-error">🖼️</div>;
+    return <img src={getIPFSUrl(src, gatewayIndex)} alt={alt} onError={handleError} />;
+}
+
 export function QuickMint() {
     // Use wagmi hooks - same as Header for consistent wallet state
     const { address: account, isConnected, connector } = useAccount();
@@ -442,7 +482,7 @@ export function QuickMint() {
                                 {userNFTs.map((nft) => (
                                     <div key={nft.tokenId} className="nft-card">
                                         <div className="nft-image">
-                                            <img src={nft.image} alt={nft.name} />
+                                            <NFTImage src={nft.image} alt={nft.name} />
                                         </div>
                                         <div className="nft-info">
                                             <h3 className="nft-name">{nft.name}</h3>
