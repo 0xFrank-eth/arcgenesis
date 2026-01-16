@@ -16,6 +16,7 @@ const QUICKMINT_ABI = [
 
 // Alternative IPFS gateways for fallback
 const IPFS_GATEWAYS = [
+    'https://nftstorage.link/ipfs/',
     'https://gateway.pinata.cloud/ipfs/',
     'https://ipfs.io/ipfs/',
     'https://cloudflare-ipfs.com/ipfs/',
@@ -139,11 +140,10 @@ export function QuickMint() {
             console.error('Error loading user NFTs:', err);
         }
     };
-
     // Pinata JWT for IPFS uploads
-    const PINATA_JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI1Njc0YjExOC03MWEzLTQxYzgtOGQzOC03YzAwZmFhOTBlZmYiLCJlbWFpbCI6Im1jNzY5OTEzOUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwicGluX3BvbGljeSI6eyJyZWdpb25zIjpbeyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJGUkExIn0seyJkZXNpcmVkUmVwbGljYXRpb25Db3VudCI6MSwiaWQiOiJOWUMxIn1dLCJ2ZXJzaW9uIjoxfSwibWZhX2VuYWJsZWQiOmZhbHNlLCJzdGF0dXMiOiJBQ1RJVkUifSwiYXV0aGVudGljYXRpb25UeXBlIjoic2NvcGVkS2V5Iiwic2NvcGVkS2V5S2V5IjoiMjhkMGZmOWMzMGVlMmY0Y2E1NTYiLCJzY29wZWRLZXlTZWNyZXQiOiJiYzE2OTAxY2MxODMxOGViMGIxYmMwYmU2OTUzZTZiNGVkZGI0MzNiMTczMzQ5N2YyNWNiMTIwNzcxMGIxOTRlIiwiZXhwIjoxNzk5NzM4NDUwfQ.HYqqihez4XO8HSBQF5ZGVMwFuenixpvk_JBcFhXvP-Y';
+    const PINATA_JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiJhZTBlZjA3NC0yN2NkLTQ3N2ItODY5OS1lNDE0YjEwNTNmMWIiLCJlbWFpbCI6ImNpaGF0dm9vbGthbjc0ODBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6IjFjNmU4MDFiN2UzY2FiMDE1MDA3Iiwic2NvcGVkS2V5U2VjcmV0IjoiOThhYTAxYjljYzQyYzQ1YTFmMWIxMjUyNGMyMWI5NmY4MDQ5N2Q0NDM1Mjc1ZTAyNDY2MGRlMjJkY2M0NjFlMyIsImV4cCI6MTgwMDA4MTIwNn0.xPla8yo0qOnGzhCbCv9hwd5sQck755K3nlCLxOTSw1s';
 
-    // Upload to Pinata IPFS - Full quality images!
+    // Upload to Pinata IPFS
     const uploadToIPFS = async (file) => {
         console.log('📤 Uploading to Pinata IPFS...');
 
