@@ -3,6 +3,9 @@ import { useAccount, useConnect, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
+// Build version - used to verify deployment cache
+const BUILD_VERSION = 'v4-raw-tx-20260219';
+
 // QuickMint ABI
 const QUICKMINT_ABI = [
     "function mint(string name, string description, string image) external payable returns (uint256)",
@@ -401,10 +404,9 @@ export function QuickMint() {
                 );
             }
 
-            // === STEP 5: Send mint via RAW TRANSACTION (bypass ethers contract layer) ===
-            // Arc Testnet RPC is incompatible with ethers.js contract calls ("could not coalesce")
-            // So we encode the function call manually and send as raw transaction
-            console.log('Encoding mint function call manually...');
+            // === STEP 5: Send mint via DIRECT wallet RPC (bypass ethers.js completely) ===
+            console.log(`=== BUILD: ${BUILD_VERSION} ===`);
+            console.log('Encoding mint function call...');
             setSuccess('Please confirm the transaction in your wallet...');
 
             const iface = new ethers.Interface(QUICKMINT_ABI);
@@ -415,24 +417,45 @@ export function QuickMint() {
             ]);
             console.log('Encoded data length:', mintData.length);
 
-            const tx = await freshSigner.sendTransaction({
-                to: CONTRACTS.QUICKMINT,
-                data: mintData,
-                value: price,
-                gasLimit: 500000n,
-                gasPrice: gasPrice
+            // Use wallet provider DIRECTLY — no ethers.js in the middle
+            const txHash = await walletProvider.request({
+                method: 'eth_sendTransaction',
+                params: [{
+                    from: signerAddress,
+                    to: CONTRACTS.QUICKMINT,
+                    data: mintData,
+                    value: '0x' + price.toString(16),
+                    gas: '0x' + (500000).toString(16),
+                }]
             });
 
-            console.log('TX sent:', tx.hash);
-            setSuccess(`Transaction sent! Confirming... TX: ${tx.hash.slice(0, 10)}...`);
+            console.log('TX sent:', txHash);
+            setSuccess(`Transaction sent! Confirming... TX: ${txHash.slice(0, 10)}...`);
 
-            // Wait for confirmation
-            const receipt = await tx.wait();
+            // Wait for receipt using RPC provider (reliable)
+            const rpcWaitProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            let receipt = null;
+            for (let i = 0; i < 60; i++) {
+                await new Promise(r => setTimeout(r, 3000));
+                receipt = await rpcWaitProvider.getTransactionReceipt(txHash);
+                if (receipt) break;
+                console.log(`Waiting for confirmation... (${i + 1})`);
+            }
+
+            if (!receipt) {
+                setSuccess(`⏳ Transaction sent (${txHash.slice(0, 10)}...) but taking long to confirm. Check explorer.`);
+                return;
+            }
+
             console.log('TX confirmed:', receipt);
+
+            if (receipt.status === 0) {
+                throw new Error('Transaction was mined but REVERTED. Check explorer: ' + txHash);
+            }
 
             // Find token ID from events
             let tokenId = 'Unknown';
-            if (receipt && receipt.logs) {
+            if (receipt.logs) {
                 const iface2 = new ethers.Interface(QUICKMINT_ABI);
                 for (const log of receipt.logs) {
                     try {
@@ -458,36 +481,21 @@ export function QuickMint() {
             await loadContractData();
 
         } catch (err) {
-            console.error('Mint error:', err);
+            console.error('=== MINT ERROR FULL ===', err);
             console.error('Error code:', err.code);
             console.error('Error reason:', err.reason);
             console.error('Error message:', err.message);
+            console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
 
-            // Provide user-friendly error messages
-            let errorMsg = 'Minting failed';
-            const errMsg = (err.message || '').toLowerCase();
-
-            if (errMsg.includes('insufficient balance') || errMsg.includes('insufficient usdc')) {
-                errorMsg = err.message;
-            } else if (errMsg.includes('could not coalesce')) {
-                errorMsg = '❌ Transaction would revert! Most likely causes:\n' +
-                    '• Insufficient USDC balance — get from faucet.circle.com\n' +
-                    '• Transaction gas issue — try refreshing the page';
-            } else if (err.code === 'CALL_EXCEPTION') {
-                errorMsg = '❌ Contract call failed! Possible causes:\n' +
-                    '• Wallet is on wrong network (switch to Arc Testnet)\n' +
-                    '• Contract may need redeployment\n' +
-                    '• Insufficient USDC balance';
-            } else if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
+            // Show RAW error for debugging — no more hiding behind generic messages
+            let errorMsg;
+            if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
                 errorMsg = 'Transaction cancelled by user.';
-            } else if (err.code === 'INSUFFICIENT_FUNDS') {
-                errorMsg = 'Insufficient funds! Get testnet USDC from faucet.circle.com';
-            } else if (err.message?.includes('not found')) {
-                errorMsg = err.message;
-            } else if (err.message?.includes('Transaction would fail')) {
+            } else if (err.message?.includes('Insufficient balance')) {
                 errorMsg = err.message;
             } else {
-                errorMsg = err.reason || err.shortMessage || err.message || 'Unknown error occurred';
+                // Show the REAL error so we can debug
+                errorMsg = `[${BUILD_VERSION}] Error: ${err.reason || err.shortMessage || err.message || 'Unknown'}`;
             }
 
             setError(errorMsg);
