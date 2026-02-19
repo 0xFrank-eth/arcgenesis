@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
 // Build version - used to verify deployment cache
-const BUILD_VERSION = 'v5-zero-browser-20260219';
+const BUILD_VERSION = 'v6-gas-fix-20260219';
 
 // QuickMint ABI
 const QUICKMINT_ABI = [
@@ -397,7 +397,7 @@ export function QuickMint() {
                     to: CONTRACTS.QUICKMINT,
                     data: mintData,
                     value: '0x' + price.toString(16),
-                    gas: '0x' + (500000).toString(16),
+                    gas: '0x' + (2000000).toString(16),
                 }]
             });
 
