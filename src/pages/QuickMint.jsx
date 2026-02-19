@@ -98,6 +98,15 @@ export function QuickMint() {
     const loadContractData = async () => {
         try {
             const rpcProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+
+            // Check if contract still exists on-chain
+            const code = await rpcProvider.getCode(CONTRACTS.QUICKMINT);
+            if (!code || code === '0x') {
+                console.error('⚠️ QuickMint contract not found! Testnet may have been reset.');
+                setError('⚠️ Contract not found on Arc Testnet. The testnet may have been reset and the contract needs to be redeployed.');
+                return;
+            }
+
             const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, rpcProvider);
 
             const price = await contract.mintPrice();
@@ -106,11 +115,17 @@ export function QuickMint() {
             const minted = await contract.totalMinted();
             setTotalMinted(Number(minted));
 
+            // Clear any previous errors since data loaded successfully
+            setError('');
+
             if (account) {
                 await loadUserNFTs(contract);
             }
         } catch (err) {
             console.error('Error loading contract data:', err);
+            if (err.code === 'CALL_EXCEPTION') {
+                setError('⚠️ Cannot connect to QuickMint contract. The RPC might be down or the contract may need redeployment.');
+            }
         }
     };
 
@@ -285,32 +300,100 @@ export function QuickMint() {
             }
 
             // Get provider from the connected wallet client (works with MetaMask, Rainbow, etc.)
-            const provider = await connector.getProvider();
-            const browserProvider = new ethers.BrowserProvider(provider);
-            const freshSigner = await browserProvider.getSigner();
-            const signerAddress = await freshSigner.getAddress();
+            const walletProvider = await connector.getProvider();
+            const browserProvider = new ethers.BrowserProvider(walletProvider);
 
+            // === STEP 1: Check and switch to Arc Testnet ===
             console.log('=== MINT DEBUG ===');
+            const network = await browserProvider.getNetwork();
+            const currentChainId = Number(network.chainId);
+            console.log('Current chain:', currentChainId, '| Required:', ARC_TESTNET.chainId);
+
+            if (currentChainId !== ARC_TESTNET.chainId) {
+                console.log('Wrong chain! Switching to Arc Testnet...');
+                setSuccess('Switching to Arc Testnet...');
+                try {
+                    await walletProvider.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: ARC_TESTNET.chainIdHex }]
+                    });
+                } catch (switchError) {
+                    // Chain not added yet, add it
+                    if (switchError.code === 4902 || switchError?.data?.originalError?.code === 4902) {
+                        await walletProvider.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: ARC_TESTNET.chainIdHex,
+                                chainName: ARC_TESTNET.name,
+                                nativeCurrency: ARC_TESTNET.currency,
+                                rpcUrls: [ARC_TESTNET.rpcUrl],
+                                blockExplorerUrls: [ARC_TESTNET.blockExplorer]
+                            }]
+                        });
+                    } else {
+                        throw new Error('Please switch to Arc Testnet in your wallet.');
+                    }
+                }
+                // Re-create provider after chain switch
+                const freshBrowserProvider = new ethers.BrowserProvider(walletProvider);
+                const freshSigner = await freshBrowserProvider.getSigner();
+                const signerAddress = await freshSigner.getAddress();
+                console.log('Switched! Signer:', signerAddress);
+            }
+
+            // Get fresh signer after potential chain switch
+            const freshBrowserProvider = new ethers.BrowserProvider(walletProvider);
+            const freshSigner = await freshBrowserProvider.getSigner();
+            const signerAddress = await freshSigner.getAddress();
             console.log('Signer:', signerAddress);
             console.log('Contract:', CONTRACTS.QUICKMINT);
+
+            // === STEP 2: Verify contract exists ===
+            const rpcProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            const contractCode = await rpcProvider.getCode(CONTRACTS.QUICKMINT);
+            console.log('Contract code length:', contractCode.length);
+
+            if (!contractCode || contractCode === '0x') {
+                throw new Error(
+                    'QuickMint contract not found on Arc Testnet! ' +
+                    'The testnet may have been reset. Contract needs to be redeployed. ' +
+                    'Address: ' + CONTRACTS.QUICKMINT
+                );
+            }
+
+            // === STEP 3: Get mint price using RPC provider (more reliable) ===
+            const rpcContract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, rpcProvider);
+            let price;
+            try {
+                price = await rpcContract.mintPrice();
+                console.log('Price (from RPC):', price.toString());
+            } catch (priceErr) {
+                console.error('Failed to get price from RPC, trying browser provider...', priceErr);
+                // Fallback to browser provider
+                const signerContract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
+                price = await signerContract.mintPrice();
+                console.log('Price (from browser):', price.toString());
+            }
+
             console.log('Name:', name.trim());
             console.log('Description:', description.trim() || 'Minted on ArcGenesis');
             console.log('Image URL length:', imageUrl.length);
 
-            // Create contract with signer
-            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
-
-            // Get mint price
-            const price = await contract.mintPrice();
-            console.log('Price:', price.toString());
-
-            // Get gas settings
-            const feeData = await browserProvider.getFeeData();
-            const gasPrice = ((feeData.gasPrice || 160000000000n) * 150n) / 100n;
+            // === STEP 4: Get gas settings ===
+            let gasPrice;
+            try {
+                const feeData = await freshBrowserProvider.getFeeData();
+                gasPrice = ((feeData.gasPrice || 160000000000n) * 150n) / 100n;
+            } catch {
+                // Fallback gas price
+                gasPrice = 240000000000n;
+            }
             console.log('Gas price:', gasPrice.toString());
 
-            // Call mint directly on contract
+            // === STEP 5: Send mint transaction ===
+            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
             console.log('Calling contract.mint()...');
+            setSuccess('Please confirm the transaction in your wallet...');
 
             const tx = await contract.mint(
                 name.trim(),
@@ -318,17 +401,16 @@ export function QuickMint() {
                 imageUrl,
                 {
                     value: price,
-                    gasLimit: 500000, // IPFS URL is small, needs less gas
+                    gasLimit: 500000,
                     gasPrice: gasPrice
                 }
             );
 
             console.log('TX sent:', tx.hash);
-            setSuccess('Transaction sent! Confirming...');
+            setSuccess(`Transaction sent! Confirming... TX: ${tx.hash.slice(0, 10)}...`);
 
-            // Simple wait - no timeout complexity
+            // Wait for confirmation
             const receipt = await tx.wait();
-
             console.log('TX confirmed:', receipt);
 
             // Find token ID from events
@@ -359,7 +441,25 @@ export function QuickMint() {
 
         } catch (err) {
             console.error('Mint error:', err);
-            setError(err.reason || err.message || 'Minting failed');
+
+            // Provide user-friendly error messages
+            let errorMsg = 'Minting failed';
+            if (err.code === 'CALL_EXCEPTION') {
+                errorMsg = '❌ Contract call failed! Possible causes:\n' +
+                    '• Wallet is on wrong network (switch to Arc Testnet)\n' +
+                    '• Contract may need redeployment\n' +
+                    '• Insufficient USDC balance';
+            } else if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
+                errorMsg = 'Transaction cancelled by user.';
+            } else if (err.code === 'INSUFFICIENT_FUNDS') {
+                errorMsg = 'Insufficient funds! Get testnet USDC from faucet.circle.com';
+            } else if (err.message?.includes('not found')) {
+                errorMsg = err.message;
+            } else {
+                errorMsg = err.reason || err.shortMessage || err.message || 'Unknown error occurred';
+            }
+
+            setError(errorMsg);
         } finally {
             setIsMinting(false);
         }
