@@ -390,8 +390,47 @@ export function QuickMint() {
             }
             console.log('Gas price:', gasPrice.toString());
 
-            // === STEP 5: Send mint transaction ===
+            // === STEP 4.5: Check user balance ===
+            const userBalance = await freshBrowserProvider.getBalance(signerAddress);
+            console.log('User balance:', userBalance.toString(), '| Mint price:', price.toString());
+
+            if (userBalance < price) {
+                throw new Error(
+                    `Insufficient balance! You have ${(Number(userBalance) / 1e6).toFixed(2)} USDC but need ${(Number(price) / 1e6).toFixed(2)} USDC. ` +
+                    'Get testnet USDC from faucet.circle.com'
+                );
+            }
+
+            // === STEP 5: Pre-test with staticCall ===
             const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
+            console.log('Pre-testing with staticCall...');
+
+            try {
+                await contract.mint.staticCall(
+                    name.trim(),
+                    description.trim() || 'Minted on ArcGenesis',
+                    imageUrl,
+                    { value: price }
+                );
+                console.log('staticCall passed ✅');
+            } catch (staticErr) {
+                console.error('staticCall failed:', staticErr);
+                // Extract revert reason
+                const reason = staticErr.reason || staticErr.revert?.args?.[0] || staticErr.shortMessage || '';
+                if (reason.includes('Insufficient payment')) {
+                    throw new Error('Insufficient USDC payment. Get more from faucet.circle.com');
+                } else if (reason.includes('Name required')) {
+                    throw new Error('NFT name is required.');
+                } else if (reason.includes('Image required')) {
+                    throw new Error('Image is required.');
+                } else if (reason.includes('Payment failed')) {
+                    throw new Error('Treasury payment failed. Platform treasury may not be accepting payments.');
+                } else {
+                    throw new Error('Transaction would fail: ' + (reason || staticErr.message || 'Unknown reason'));
+                }
+            }
+
+            // === STEP 6: Send actual mint transaction ===
             console.log('Calling contract.mint()...');
             setSuccess('Please confirm the transaction in your wallet...');
 
@@ -441,10 +480,21 @@ export function QuickMint() {
 
         } catch (err) {
             console.error('Mint error:', err);
+            console.error('Error code:', err.code);
+            console.error('Error reason:', err.reason);
+            console.error('Error message:', err.message);
 
             // Provide user-friendly error messages
             let errorMsg = 'Minting failed';
-            if (err.code === 'CALL_EXCEPTION') {
+            const errMsg = (err.message || '').toLowerCase();
+
+            if (errMsg.includes('insufficient balance') || errMsg.includes('insufficient usdc')) {
+                errorMsg = err.message;
+            } else if (errMsg.includes('could not coalesce')) {
+                errorMsg = '❌ Transaction would revert! Most likely causes:\n' +
+                    '• Insufficient USDC balance — get from faucet.circle.com\n' +
+                    '• Transaction gas issue — try refreshing the page';
+            } else if (err.code === 'CALL_EXCEPTION') {
                 errorMsg = '❌ Contract call failed! Possible causes:\n' +
                     '• Wallet is on wrong network (switch to Arc Testnet)\n' +
                     '• Contract may need redeployment\n' +
@@ -454,6 +504,8 @@ export function QuickMint() {
             } else if (err.code === 'INSUFFICIENT_FUNDS') {
                 errorMsg = 'Insufficient funds! Get testnet USDC from faucet.circle.com';
             } else if (err.message?.includes('not found')) {
+                errorMsg = err.message;
+            } else if (err.message?.includes('Transaction would fail')) {
                 errorMsg = err.message;
             } else {
                 errorMsg = err.reason || err.shortMessage || err.message || 'Unknown error occurred';
