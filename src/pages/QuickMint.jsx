@@ -401,51 +401,27 @@ export function QuickMint() {
                 );
             }
 
-            // === STEP 5: Pre-test with staticCall (non-blocking on Arc Testnet) ===
-            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
-            console.log('Pre-testing with staticCall...');
-
-            try {
-                await contract.mint.staticCall(
-                    name.trim(),
-                    description.trim() || 'Minted on ArcGenesis',
-                    imageUrl,
-                    { value: price }
-                );
-                console.log('staticCall passed ✅');
-            } catch (staticErr) {
-                console.warn('staticCall result:', staticErr);
-                const reason = staticErr.reason || staticErr.revert?.args?.[0] || staticErr.shortMessage || '';
-                const msg = (staticErr.message || '').toLowerCase();
-
-                // Only block on CLEAR revert reasons from the contract
-                if (reason.includes('Insufficient payment')) {
-                    throw new Error('Insufficient USDC payment. Get more from faucet.circle.com');
-                } else if (reason.includes('Name required')) {
-                    throw new Error('NFT name is required.');
-                } else if (reason.includes('Image required')) {
-                    throw new Error('Image is required.');
-                } else if (reason.includes('Payment failed')) {
-                    throw new Error('Treasury payment failed. Platform treasury may not be accepting payments.');
-                }
-                // If "could not coalesce" or other RPC parsing issue — skip and try sending directly
-                console.log('⚠️ staticCall inconclusive (Arc Testnet RPC issue), proceeding to direct mint...');
-            }
-
-            // === STEP 6: Send actual mint transaction ===
-            console.log('Calling contract.mint()...');
+            // === STEP 5: Send mint via RAW TRANSACTION (bypass ethers contract layer) ===
+            // Arc Testnet RPC is incompatible with ethers.js contract calls ("could not coalesce")
+            // So we encode the function call manually and send as raw transaction
+            console.log('Encoding mint function call manually...');
             setSuccess('Please confirm the transaction in your wallet...');
 
-            const tx = await contract.mint(
+            const iface = new ethers.Interface(QUICKMINT_ABI);
+            const mintData = iface.encodeFunctionData('mint', [
                 name.trim(),
                 description.trim() || 'Minted on ArcGenesis',
-                imageUrl,
-                {
-                    value: price,
-                    gasLimit: 500000,
-                    gasPrice: gasPrice
-                }
-            );
+                imageUrl
+            ]);
+            console.log('Encoded data length:', mintData.length);
+
+            const tx = await freshSigner.sendTransaction({
+                to: CONTRACTS.QUICKMINT,
+                data: mintData,
+                value: price,
+                gasLimit: 500000n,
+                gasPrice: gasPrice
+            });
 
             console.log('TX sent:', tx.hash);
             setSuccess(`Transaction sent! Confirming... TX: ${tx.hash.slice(0, 10)}...`);
@@ -457,9 +433,10 @@ export function QuickMint() {
             // Find token ID from events
             let tokenId = 'Unknown';
             if (receipt && receipt.logs) {
+                const iface2 = new ethers.Interface(QUICKMINT_ABI);
                 for (const log of receipt.logs) {
                     try {
-                        const parsed = contract.interface.parseLog(log);
+                        const parsed = iface2.parseLog(log);
                         if (parsed && parsed.name === 'NFTMinted') {
                             tokenId = parsed.args[0].toString();
                             break;
