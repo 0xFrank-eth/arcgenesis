@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
 // Build version - used to verify deployment cache
-const BUILD_VERSION = 'v4-raw-tx-20260219';
+const BUILD_VERSION = 'v5-zero-browser-20260219';
 
 // QuickMint ABI
 const QUICKMINT_ABI = [
@@ -297,23 +297,24 @@ export function QuickMint() {
         setSuccess('');
 
         try {
-            // Use wagmi's wallet client to get the provider from the CONNECTED wallet
             if (!walletClient) {
                 throw new Error('Wallet not connected. Please connect your wallet first.');
             }
 
-            // Get provider from the connected wallet client (works with MetaMask, Rainbow, etc.)
-            const walletProvider = await connector.getProvider();
-            const browserProvider = new ethers.BrowserProvider(walletProvider);
+            // ============================================================
+            // ZERO ethers.js BrowserProvider — all calls via raw RPC
+            // ============================================================
+            console.log(`=== MINT DEBUG [${BUILD_VERSION}] ===`);
 
-            // === STEP 1: Check and switch to Arc Testnet ===
-            console.log('=== MINT DEBUG ===');
-            const network = await browserProvider.getNetwork();
-            const currentChainId = Number(network.chainId);
+            const walletProvider = await connector.getProvider();
+
+            // === STEP 1: Check chain via raw RPC ===
+            const chainIdHex = await walletProvider.request({ method: 'eth_chainId' });
+            const currentChainId = parseInt(chainIdHex, 16);
             console.log('Current chain:', currentChainId, '| Required:', ARC_TESTNET.chainId);
 
             if (currentChainId !== ARC_TESTNET.chainId) {
-                console.log('Wrong chain! Switching to Arc Testnet...');
+                console.log('Wrong chain! Switching...');
                 setSuccess('Switching to Arc Testnet...');
                 try {
                     await walletProvider.request({
@@ -321,7 +322,6 @@ export function QuickMint() {
                         params: [{ chainId: ARC_TESTNET.chainIdHex }]
                     });
                 } catch (switchError) {
-                    // Chain not added yet, add it
                     if (switchError.code === 4902 || switchError?.data?.originalError?.code === 4902) {
                         await walletProvider.request({
                             method: 'wallet_addEthereumChain',
@@ -337,21 +337,15 @@ export function QuickMint() {
                         throw new Error('Please switch to Arc Testnet in your wallet.');
                     }
                 }
-                // Re-create provider after chain switch
-                const freshBrowserProvider = new ethers.BrowserProvider(walletProvider);
-                const freshSigner = await freshBrowserProvider.getSigner();
-                const signerAddress = await freshSigner.getAddress();
-                console.log('Switched! Signer:', signerAddress);
             }
 
-            // Get fresh signer after potential chain switch
-            const freshBrowserProvider = new ethers.BrowserProvider(walletProvider);
-            const freshSigner = await freshBrowserProvider.getSigner();
-            const signerAddress = await freshSigner.getAddress();
+            // === STEP 2: Get signer address via raw RPC ===
+            const accounts = await walletProvider.request({ method: 'eth_accounts' });
+            const signerAddress = accounts[0];
             console.log('Signer:', signerAddress);
             console.log('Contract:', CONTRACTS.QUICKMINT);
 
-            // === STEP 2: Verify contract exists ===
+            // === STEP 3: Verify contract exists (via JsonRpcProvider — works fine) ===
             const rpcProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
             const contractCode = await rpcProvider.getCode(CONTRACTS.QUICKMINT);
             console.log('Contract code length:', contractCode.length);
@@ -359,54 +353,34 @@ export function QuickMint() {
             if (!contractCode || contractCode === '0x') {
                 throw new Error(
                     'QuickMint contract not found on Arc Testnet! ' +
-                    'The testnet may have been reset. Contract needs to be redeployed. ' +
-                    'Address: ' + CONTRACTS.QUICKMINT
+                    'The testnet may have been reset. Contract needs to be redeployed.'
                 );
             }
 
-            // === STEP 3: Get mint price using RPC provider (more reliable) ===
+            // === STEP 4: Get mint price (via JsonRpcProvider — works fine) ===
             const rpcContract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, rpcProvider);
-            let price;
-            try {
-                price = await rpcContract.mintPrice();
-                console.log('Price (from RPC):', price.toString());
-            } catch (priceErr) {
-                console.error('Failed to get price from RPC, trying browser provider...', priceErr);
-                // Fallback to browser provider
-                const signerContract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
-                price = await signerContract.mintPrice();
-                console.log('Price (from browser):', price.toString());
-            }
+            const price = await rpcContract.mintPrice();
+            console.log('Price:', price.toString());
 
-            console.log('Name:', name.trim());
-            console.log('Description:', description.trim() || 'Minted on ArcGenesis');
-            console.log('Image URL length:', imageUrl.length);
-
-            // === STEP 4: Get gas settings ===
-            let gasPrice;
-            try {
-                const feeData = await freshBrowserProvider.getFeeData();
-                gasPrice = ((feeData.gasPrice || 160000000000n) * 150n) / 100n;
-            } catch {
-                // Fallback gas price
-                gasPrice = 240000000000n;
-            }
-            console.log('Gas price:', gasPrice.toString());
-
-            // === STEP 4.5: Check user balance ===
-            const userBalance = await freshBrowserProvider.getBalance(signerAddress);
-            console.log('User balance:', userBalance.toString(), '| Mint price:', price.toString());
+            // === STEP 5: Check balance via raw RPC ===
+            const balanceHex = await walletProvider.request({
+                method: 'eth_getBalance',
+                params: [signerAddress, 'latest']
+            });
+            const userBalance = BigInt(balanceHex);
+            console.log('Balance:', userBalance.toString(), '| Price:', price.toString());
 
             if (userBalance < price) {
                 throw new Error(
-                    `Insufficient balance! You have ${(Number(userBalance) / 1e6).toFixed(2)} USDC but need ${(Number(price) / 1e6).toFixed(2)} USDC. ` +
-                    'Get testnet USDC from faucet.circle.com'
+                    `Insufficient balance! You have ${(Number(userBalance) / 1e18).toFixed(6)} but need ${(Number(price) / 1e18).toFixed(6)}. ` +
+                    'Get testnet funds from the faucet.'
                 );
             }
 
-            // === STEP 5: Send mint via DIRECT wallet RPC (bypass ethers.js completely) ===
-            console.log(`=== BUILD: ${BUILD_VERSION} ===`);
-            console.log('Encoding mint function call...');
+            // === STEP 6: Encode and send transaction via RAW wallet RPC ===
+            console.log('Encoding mint call...');
+            console.log('Name:', name.trim());
+            console.log('Image URL length:', imageUrl.length);
             setSuccess('Please confirm the transaction in your wallet...');
 
             const iface = new ethers.Interface(QUICKMINT_ABI);
@@ -415,9 +389,7 @@ export function QuickMint() {
                 description.trim() || 'Minted on ArcGenesis',
                 imageUrl
             ]);
-            console.log('Encoded data length:', mintData.length);
 
-            // Use wallet provider DIRECTLY — no ethers.js in the middle
             const txHash = await walletProvider.request({
                 method: 'eth_sendTransaction',
                 params: [{
@@ -432,25 +404,24 @@ export function QuickMint() {
             console.log('TX sent:', txHash);
             setSuccess(`Transaction sent! Confirming... TX: ${txHash.slice(0, 10)}...`);
 
-            // Wait for receipt using RPC provider (reliable)
-            const rpcWaitProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            // === STEP 7: Wait for receipt (via JsonRpcProvider) ===
             let receipt = null;
             for (let i = 0; i < 60; i++) {
                 await new Promise(r => setTimeout(r, 3000));
-                receipt = await rpcWaitProvider.getTransactionReceipt(txHash);
+                receipt = await rpcProvider.getTransactionReceipt(txHash);
                 if (receipt) break;
-                console.log(`Waiting for confirmation... (${i + 1})`);
+                console.log(`Waiting... (${i + 1})`);
             }
 
             if (!receipt) {
-                setSuccess(`⏳ Transaction sent (${txHash.slice(0, 10)}...) but taking long to confirm. Check explorer.`);
+                setSuccess(`⏳ TX sent (${txHash.slice(0, 10)}...) but taking long. Check explorer.`);
                 return;
             }
 
             console.log('TX confirmed:', receipt);
 
             if (receipt.status === 0) {
-                throw new Error('Transaction was mined but REVERTED. Check explorer: ' + txHash);
+                throw new Error('Transaction REVERTED on chain. Hash: ' + txHash);
             }
 
             // Find token ID from events
@@ -476,28 +447,20 @@ export function QuickMint() {
             setImage(null);
             setImagePreview('');
             setImageUrl('');
-
-            // Reload data
             await loadContractData();
 
         } catch (err) {
-            console.error('=== MINT ERROR FULL ===', err);
-            console.error('Error code:', err.code);
-            console.error('Error reason:', err.reason);
-            console.error('Error message:', err.message);
-            console.error('Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+            console.error('=== MINT ERROR ===', err);
+            console.error('Full:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
 
-            // Show RAW error for debugging — no more hiding behind generic messages
             let errorMsg;
             if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
                 errorMsg = 'Transaction cancelled by user.';
             } else if (err.message?.includes('Insufficient balance')) {
                 errorMsg = err.message;
             } else {
-                // Show the REAL error so we can debug
-                errorMsg = `[${BUILD_VERSION}] Error: ${err.reason || err.shortMessage || err.message || 'Unknown'}`;
+                errorMsg = `[${BUILD_VERSION}] ${err.reason || err.shortMessage || err.message || 'Unknown error'}`;
             }
-
             setError(errorMsg);
         } finally {
             setIsMinting(false);
