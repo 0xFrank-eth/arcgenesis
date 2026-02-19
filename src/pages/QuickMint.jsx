@@ -199,40 +199,26 @@ export function QuickMint() {
         }
     };
 
-    // Fallback base64 — iteratively compress until under 4KB for on-chain storage
+    // Fallback base64 for when IPFS is unavailable
     const createBase64Fallback = (file) => {
         return new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const img = new Image();
                 img.onload = () => {
-                    const MAX_BASE64_LENGTH = 4000; // ~4KB max for on-chain
-                    let size = 200;
-                    let quality = 0.7;
-                    let result;
-
-                    // Try progressively smaller sizes/quality until under limit
-                    for (let attempt = 0; attempt < 8; attempt++) {
-                        const canvas = document.createElement('canvas');
-                        let { width, height } = img;
-                        const ratio = Math.min(size / width, size / height, 1);
-                        canvas.width = Math.round(width * ratio);
-                        canvas.height = Math.round(height * ratio);
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                        result = canvas.toDataURL('image/jpeg', quality);
-
-                        console.log(`Compress attempt ${attempt}: ${size}px q${quality} → ${result.length} chars`);
-
-                        if (result.length <= MAX_BASE64_LENGTH) break;
-
-                        // Reduce for next attempt
-                        quality = Math.max(0.3, quality - 0.1);
-                        size = Math.max(64, Math.round(size * 0.7));
+                    const canvas = document.createElement('canvas');
+                    const maxSize = 128;
+                    let { width, height } = img;
+                    if (width > maxSize || height > maxSize) {
+                        const ratio = Math.min(maxSize / width, maxSize / height);
+                        width = Math.round(width * ratio);
+                        height = Math.round(height * ratio);
                     }
-
-                    console.log('Final image size:', result.length, 'chars');
-                    resolve(result);
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.65));
                 };
                 img.src = e.target.result;
             };
@@ -404,11 +390,6 @@ export function QuickMint() {
                 imageUrl
             ]);
 
-            // Dynamic gas: base cost + proportional to data size
-            const dataBytes = mintData.length / 2; // hex chars to bytes
-            const dynamicGas = Math.max(3500000, Math.ceil(dataBytes * 100) + 2000000);
-            console.log('Data bytes:', dataBytes, '| Dynamic gas:', dynamicGas);
-
             const txHash = await walletProvider.request({
                 method: 'eth_sendTransaction',
                 params: [{
@@ -416,7 +397,7 @@ export function QuickMint() {
                     to: CONTRACTS.QUICKMINT,
                     data: mintData,
                     value: '0x' + price.toString(16),
-                    gas: '0x' + dynamicGas.toString(16),
+                    gas: '0x' + (3500000).toString(16),
                 }]
             });
 
