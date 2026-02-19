@@ -207,7 +207,7 @@ export function QuickMint() {
                 const img = new Image();
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
-                    const maxSize = 128;
+                    const maxSize = 512;
                     let { width, height } = img;
                     if (width > maxSize || height > maxSize) {
                         const ratio = Math.min(maxSize / width, maxSize / height);
@@ -218,7 +218,7 @@ export function QuickMint() {
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.65));
+                    resolve(canvas.toDataURL('image/jpeg', 0.85));
                 };
                 img.src = e.target.result;
             };
