@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
 // Build version - used to verify deployment cache
-const BUILD_VERSION = 'v7-gas-3.5M';
+const BUILD_VERSION = 'v8-balanced-img';
 
 // QuickMint ABI
 const QUICKMINT_ABI = [
@@ -207,7 +207,7 @@ export function QuickMint() {
                 const img = new Image();
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
-                    const maxSize = 512;
+                    const maxSize = 256;
                     let { width, height } = img;
                     if (width > maxSize || height > maxSize) {
                         const ratio = Math.min(maxSize / width, maxSize / height);
@@ -218,7 +218,7 @@ export function QuickMint() {
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.85));
+                    resolve(canvas.toDataURL('image/jpeg', 0.80));
                 };
                 img.src = e.target.result;
             };
@@ -390,6 +390,11 @@ export function QuickMint() {
                 imageUrl
             ]);
 
+            // Dynamic gas: base cost + proportional to data size
+            const dataBytes = mintData.length / 2; // hex chars to bytes
+            const dynamicGas = Math.max(3500000, Math.ceil(dataBytes * 100) + 2000000);
+            console.log('Data bytes:', dataBytes, '| Dynamic gas:', dynamicGas);
+
             const txHash = await walletProvider.request({
                 method: 'eth_sendTransaction',
                 params: [{
@@ -397,7 +402,7 @@ export function QuickMint() {
                     to: CONTRACTS.QUICKMINT,
                     data: mintData,
                     value: '0x' + price.toString(16),
-                    gas: '0x' + (3500000).toString(16),
+                    gas: '0x' + dynamicGas.toString(16),
                 }]
             });
 
