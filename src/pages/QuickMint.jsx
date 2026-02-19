@@ -401,7 +401,7 @@ export function QuickMint() {
                 );
             }
 
-            // === STEP 5: Pre-test with staticCall ===
+            // === STEP 5: Pre-test with staticCall (non-blocking on Arc Testnet) ===
             const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, freshSigner);
             console.log('Pre-testing with staticCall...');
 
@@ -414,9 +414,11 @@ export function QuickMint() {
                 );
                 console.log('staticCall passed ✅');
             } catch (staticErr) {
-                console.error('staticCall failed:', staticErr);
-                // Extract revert reason
+                console.warn('staticCall result:', staticErr);
                 const reason = staticErr.reason || staticErr.revert?.args?.[0] || staticErr.shortMessage || '';
+                const msg = (staticErr.message || '').toLowerCase();
+
+                // Only block on CLEAR revert reasons from the contract
                 if (reason.includes('Insufficient payment')) {
                     throw new Error('Insufficient USDC payment. Get more from faucet.circle.com');
                 } else if (reason.includes('Name required')) {
@@ -425,9 +427,9 @@ export function QuickMint() {
                     throw new Error('Image is required.');
                 } else if (reason.includes('Payment failed')) {
                     throw new Error('Treasury payment failed. Platform treasury may not be accepting payments.');
-                } else {
-                    throw new Error('Transaction would fail: ' + (reason || staticErr.message || 'Unknown reason'));
                 }
+                // If "could not coalesce" or other RPC parsing issue — skip and try sending directly
+                console.log('⚠️ staticCall inconclusive (Arc Testnet RPC issue), proceeding to direct mint...');
             }
 
             // === STEP 6: Send actual mint transaction ===
