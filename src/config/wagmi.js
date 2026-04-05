@@ -1,5 +1,5 @@
-import { getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { http } from 'wagmi';
+import { createConfig, http } from 'wagmi';
+import { injected } from 'wagmi/connectors';
 
 // Arc Testnet chain definition
 export const arcTestnet = {
@@ -12,7 +12,7 @@ export const arcTestnet = {
     },
     rpcUrls: {
         default: {
-            http: ['https://rpc.testnet.arc.network']
+            http: ['https://arc-testnet.drpc.org']
         }
     },
     blockExplorers: {
@@ -24,12 +24,13 @@ export const arcTestnet = {
     testnet: true
 };
 
-// RainbowKit + Wagmi config
-export const config = getDefaultConfig({
-    appName: 'ArcGenesis',
-    projectId: 'b3d41de2e2eaa8b1eeb4e3b4e7d1e5c5', // WalletConnect project ID
+// Wagmi config
+export const config = createConfig({
     chains: [arcTestnet],
+    connectors: [
+        injected({ shimDisconnect: true })
+    ],
     transports: {
-        [arcTestnet.id]: http('https://rpc.testnet.arc.network')
+        [arcTestnet.id]: http()
     }
 });

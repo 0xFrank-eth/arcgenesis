@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ethers } from 'ethers';
-import { CONTRACTS, ARC_TESTNET, formatUSDC, retryContractCall } from '../config/chains';
+import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
 
 const QUICKMINT_ABI = [
     "function totalMinted() external view returns (uint256)",
@@ -9,127 +9,63 @@ const QUICKMINT_ABI = [
     "function getTokenMetadata(uint256 tokenId) external view returns (string name, string description, string image, address creator, uint256 mintedAt)"
 ];
 
-// IPFS gateways for image fallback
-const IPFS_GATEWAYS = [
-    'https://gateway.pinata.cloud/ipfs/',
-    'https://nftstorage.link/ipfs/',
-    'https://ipfs.io/ipfs/',
-    'https://cloudflare-ipfs.com/ipfs/',
-    'https://dweb.link/ipfs/'
-];
-
-const getIPFSUrl = (url, gatewayIndex = 0) => {
-    if (!url) return '';
-    if (url.startsWith('data:')) return url;
-    let hash = '';
-    if (url.includes('/ipfs/')) {
-        hash = url.split('/ipfs/')[1];
-    } else if (url.startsWith('ipfs://')) {
-        hash = url.replace('ipfs://', '');
-    } else {
-        return url;
-    }
-    return IPFS_GATEWAYS[gatewayIndex % IPFS_GATEWAYS.length] + hash;
-};
-
-function NFTImage({ src, alt }) {
-    const [gatewayIndex, setGatewayIndex] = useState(0);
-    const [hasError, setHasError] = useState(false);
-
-    const handleError = () => {
-        if (gatewayIndex < IPFS_GATEWAYS.length - 1) {
-            setGatewayIndex(prev => prev + 1);
-        } else {
-            setHasError(true);
-        }
-    };
-
-    if (hasError) return <div className="image-error">🖼️</div>;
-    return <img src={getIPFSUrl(src, gatewayIndex)} alt={alt} onError={handleError} />;
-}
-
 export function HomePage() {
     const [stats, setStats] = useState({ totalMinted: 0, mintPrice: '0' });
     const [recentNFTs, setRecentNFTs] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const refreshIntervalRef = useRef(null);
 
     useEffect(() => {
         loadStats();
-
-        // Refresh stats every 20 seconds
-        refreshIntervalRef.current = setInterval(() => {
-            loadStats(true);
-        }, 20000);
-
-        return () => {
-            if (refreshIntervalRef.current) {
-                clearInterval(refreshIntervalRef.current);
-            }
-        };
     }, []);
 
-    const loadStats = async (silent = false) => {
+    const loadStats = async () => {
         try {
-            const data = await retryContractCall(async (provider) => {
-                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
+            const provider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
 
-                const [minted, price] = await Promise.all([
-                    contract.totalMinted(),
-                    contract.mintPrice()
-                ]);
+            const [minted, price] = await Promise.all([
+                contract.totalMinted(),
+                contract.mintPrice()
+            ]);
 
-                return { minted, price };
-            });
-
-            const totalMintedNum = Number(data.minted);
+            const totalMintedNum = Number(minted);
             setStats({
                 totalMinted: totalMintedNum,
-                mintPrice: formatUSDC(data.price)
+                mintPrice: formatUSDC(price)
             });
 
-            // Load recent NFTs (last 6) — only on initial load or if count changed
-            if (totalMintedNum > 0 && (recentNFTs.length === 0 || !silent)) {
-                await loadRecentNFTs(totalMintedNum);
+            // Load recent NFTs (last 6)
+            if (totalMintedNum > 0) {
+                await loadRecentNFTs(contract, totalMintedNum);
             }
         } catch (err) {
             console.error('Error loading stats:', err);
-            // On silent refresh failure, don't clear existing data
         } finally {
-            if (!silent) setIsLoading(false);
+            setIsLoading(false);
         }
     };
 
-    const loadRecentNFTs = async (totalMinted) => {
-        try {
-            const nfts = await retryContractCall(async (provider) => {
-                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
-                const results = [];
-                const startId = Math.max(1, totalMinted - 5); // Get last 6 NFTs
+    const loadRecentNFTs = async (contract, totalMinted) => {
+        const nfts = [];
+        const startId = Math.max(1, totalMinted - 5); // Get last 6 NFTs
 
-                for (let id = totalMinted; id >= startId; id--) {
-                    try {
-                        const [name, description, image, creator, mintedAt] = await contract.getTokenMetadata(id);
-                        results.push({
-                            id,
-                            name,
-                            description,
-                            image,
-                            creator,
-                            mintedAt: Number(mintedAt)
-                        });
-                    } catch (err) {
-                        console.error('Error loading NFT:', id, err);
-                    }
-                }
-
-                return results;
-            });
-
-            setRecentNFTs(nfts);
-        } catch (err) {
-            console.error('Error loading recent NFTs:', err);
+        for (let id = totalMinted; id >= startId; id--) {
+            try {
+                const [name, description, image, creator, mintedAt] = await contract.getTokenMetadata(id);
+                nfts.push({
+                    id,
+                    name,
+                    description,
+                    image,
+                    creator,
+                    mintedAt: Number(mintedAt)
+                });
+            } catch (err) {
+                console.error('Error loading NFT:', id, err);
+            }
         }
+
+        setRecentNFTs(nfts);
     };
 
     const formatAddress = (addr) => {
@@ -204,13 +140,13 @@ export function HomePage() {
                             {recentNFTs.map((nft) => (
                                 <div key={nft.id} className="nft-card">
                                     <div className="nft-image">
-                                        <NFTImage src={nft.image} alt={nft.name} />
+                                        <img src={nft.image} alt={nft.name} />
                                     </div>
                                     <div className="nft-info">
                                         <h3 className="nft-name">{nft.name}</h3>
                                         <div className="nft-meta">
                                             <span className="nft-creator" title={nft.creator}>
-                                                �� {formatAddress(nft.creator)}
+                                                👤 {formatAddress(nft.creator)}
                                             </span>
                                             <span className="nft-time">
                                                 🕐 {formatTime(nft.mintedAt)}

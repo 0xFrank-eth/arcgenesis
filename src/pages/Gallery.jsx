@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
-import { CONTRACTS, ARC_TESTNET, retryContractCall } from '../config/chains';
+import { CONTRACTS, ARC_TESTNET } from '../config/chains';
 
 const QUICKMINT_ABI = [
     "function totalMinted() external view returns (uint256)",
@@ -10,7 +10,6 @@ const QUICKMINT_ABI = [
 // Alternative IPFS gateways for fallback
 const IPFS_GATEWAYS = [
     'https://gateway.pinata.cloud/ipfs/',
-    'https://nftstorage.link/ipfs/',
     'https://ipfs.io/ipfs/',
     'https://cloudflare-ipfs.com/ipfs/',
     'https://dweb.link/ipfs/'
@@ -68,49 +67,31 @@ export function Gallery() {
     const [totalMinted, setTotalMinted] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const loadedRef = useRef(false);
-    const refreshIntervalRef = useRef(null);
+    const contractRef = useRef(null);
 
     useEffect(() => {
         if (loadedRef.current) return;
         loadedRef.current = true;
         initGallery();
-
-        // Refresh total count every 20 seconds
-        refreshIntervalRef.current = setInterval(async () => {
-            try {
-                const total = await retryContractCall(async (provider) => {
-                    const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
-                    return Number(await contract.totalMinted());
-                });
-                setTotalMinted(total);
-            } catch (e) {
-                console.warn('Counter refresh failed:', e.message);
-            }
-        }, 20000);
-
-        return () => {
-            if (refreshIntervalRef.current) {
-                clearInterval(refreshIntervalRef.current);
-            }
-        };
     }, []);
 
     const initGallery = async () => {
         try {
-            const total = await retryContractCall(async (provider) => {
-                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
-                return Number(await contract.totalMinted());
-            });
+            const provider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
+            contractRef.current = contract;
 
-            setTotalMinted(total);
+            const total = await contract.totalMinted();
+            const totalNum = Number(total);
+            setTotalMinted(totalNum);
 
-            if (total === 0) {
+            if (totalNum === 0) {
                 setIsLoading(false);
                 return;
             }
 
             // Load first page only
-            await loadNFTsPage(total, 1);
+            await loadNFTsPage(contract, totalNum, 1);
         } catch (err) {
             console.error('Error initializing gallery:', err);
         } finally {
@@ -118,53 +99,45 @@ export function Gallery() {
         }
     };
 
-    const loadNFTsPage = async (total, page) => {
-        try {
-            const loadedNfts = await retryContractCall(async (provider) => {
-                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
-                const startIndex = (page - 1) * ITEMS_PER_PAGE;
-                const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, total);
+    const loadNFTsPage = async (contract, total, page) => {
+        const startIndex = (page - 1) * ITEMS_PER_PAGE;
+        const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, total);
 
-                // NFT IDs go from newest to oldest (total down to 1)
-                const startId = total - startIndex;
-                const endId = total - endIndex + 1;
+        // NFT IDs go from newest to oldest (total down to 1)
+        const startId = total - startIndex;
+        const endId = total - endIndex + 1;
 
-                const results = [];
-                for (let id = startId; id >= endId; id--) {
-                    try {
-                        const [name, description, image, creator, mintedAt] = await contract.getTokenMetadata(id);
-                        results.push({
-                            id,
-                            name,
-                            description,
-                            image,
-                            creator,
-                            mintedAt: Number(mintedAt)
-                        });
-                    } catch (err) {
-                        console.error('Error loading NFT:', id);
-                    }
-                }
-                return results;
-            });
-
-            if (page === 1) {
-                setNfts(loadedNfts);
-            } else {
-                setNfts(prev => [...prev, ...loadedNfts]);
+        const loadedNfts = [];
+        for (let id = startId; id >= endId; id--) {
+            try {
+                const [name, description, image, creator, mintedAt] = await contract.getTokenMetadata(id);
+                loadedNfts.push({
+                    id,
+                    name,
+                    description,
+                    image,
+                    creator,
+                    mintedAt: Number(mintedAt)
+                });
+            } catch (err) {
+                console.error('Error loading NFT:', id);
             }
-        } catch (err) {
-            console.error('Error loading NFTs page:', err);
+        }
+
+        if (page === 1) {
+            setNfts(loadedNfts);
+        } else {
+            setNfts(prev => [...prev, ...loadedNfts]);
         }
     };
 
     const handleLoadMore = async () => {
-        if (isLoadingMore) return;
+        if (!contractRef.current || isLoadingMore) return;
 
         setIsLoadingMore(true);
         try {
             const nextPage = currentPage + 1;
-            await loadNFTsPage(totalMinted, nextPage);
+            await loadNFTsPage(contractRef.current, totalMinted, nextPage);
             setCurrentPage(nextPage);
         } catch (err) {
             console.error('Error loading more NFTs:', err);

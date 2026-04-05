@@ -1,5 +1,3 @@
-import { ethers } from 'ethers';
-
 // Arc Testnet Configuration
 export const ARC_TESTNET = {
     chainId: 5042002,
@@ -10,11 +8,7 @@ export const ARC_TESTNET = {
         symbol: 'USDC',
         decimals: 6
     },
-    rpcUrl: 'https://rpc.testnet.arc.network',
-    rpcUrls: [
-        'https://rpc.testnet.arc.network',
-        'https://arc-testnet.drpc.org'
-    ],
+    rpcUrl: 'https://arc-testnet.drpc.org',
     blockExplorer: 'https://testnet.arcscan.app',
     faucet: 'https://faucet.circle.com'
 };
@@ -75,65 +69,4 @@ export const getExplorerLink = (address, type = 'address') => {
 
 export const getTxLink = (txHash) => {
     return `${ARC_TESTNET.blockExplorer}/tx/${txHash}`;
-};
-
-/**
- * Create a provider that falls back through multiple RPC URLs.
- * Tries each RPC in sequence; returns the first one that responds.
- */
-export const createFallbackProvider = async () => {
-    for (const rpcUrl of ARC_TESTNET.rpcUrls) {
-        try {
-            const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
-                staticNetwork: true,
-                batchMaxCount: 1
-            });
-            // Quick health check - 3s timeout
-            const blockPromise = provider.getBlockNumber();
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('RPC timeout')), 3000)
-            );
-            await Promise.race([blockPromise, timeoutPromise]);
-            console.log(`✅ RPC connected: ${rpcUrl}`);
-            return provider;
-        } catch (err) {
-            console.warn(`⚠️ RPC failed: ${rpcUrl}`, err.message);
-        }
-    }
-    // Last resort — return provider for first URL without health check
-    console.warn('⚠️ All RPC health checks failed, using primary URL anyway');
-    return new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrls[0]);
-};
-
-/**
- * Retry a contract call with fallback RPC providers.
- * @param {Function} fn - async function that takes a provider and returns a result
- * @param {number} maxRetries - max retry attempts per RPC
- */
-export const retryContractCall = async (fn, maxRetries = 2) => {
-    let lastError;
-    for (const rpcUrl of ARC_TESTNET.rpcUrls) {
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-                const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
-                    staticNetwork: true
-                });
-                const result = await Promise.race([
-                    fn(provider),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error('Call timeout')), 8000)
-                    )
-                ]);
-                return result;
-            } catch (err) {
-                lastError = err;
-                console.warn(`RPC call failed (${rpcUrl}, attempt ${attempt + 1}):`, err.message);
-                // Wait before retry with backoff
-                if (attempt < maxRetries - 1) {
-                    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-                }
-            }
-        }
-    }
-    throw lastError;
 };
