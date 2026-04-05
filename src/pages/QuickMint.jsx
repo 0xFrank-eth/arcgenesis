@@ -1,10 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useAccount, useConnect, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
-import { CONTRACTS, ARC_TESTNET, formatUSDC } from '../config/chains';
+import { CONTRACTS, ARC_TESTNET, formatUSDC, retryContractCall } from '../config/chains';
 
 // Build version - used to verify deployment cache
-const BUILD_VERSION = 'v9-4kb-limit';
+const BUILD_VERSION = 'v10-quality-fix';
 
 // QuickMint ABI
 const QUICKMINT_ABI = [
@@ -58,6 +58,12 @@ function NFTImage({ src, alt }) {
     return <img src={getIPFSUrl(src, gatewayIndex)} alt={alt} onError={handleError} />;
 }
 
+// Pinata JWT for IPFS uploads
+const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiJhZTBlZjA3NC0yN2NkLTQ3N2ItODY5OS1lNDE0YjEwNTNmMWIiLCJlbWFpbCI6ImNpaGF0dm9vbGthbjc0ODBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6IjFjNmU4MDFiN2UzY2FiMDE1MDA3Iiwic2NvcGVkS2V5U2VjcmV0IjoiOThhYTAxYjljYzQyYzQ1YTFmMWIxMjUyNGMyMWI5NmY4MDQ5N2Q0NDM1Mjc1ZTAyNDY2MGRlMjJkY2M0NjFlMyIsImV4cCI6MTgwMDA4MTIwNn0.xPla8yo0qOnGzhCbCv9hwd5sQck755K3nlCLxOTSw1s';
+
+// Secondary Pinata JWT (from .env) as backup
+const PINATA_JWT_BACKUP = import.meta.env.VITE_PINATA_JWT;
+
 export function QuickMint() {
     // Use wagmi hooks - same as Header for consistent wallet state
     const { address: account, isConnected, connector } = useAccount();
@@ -66,7 +72,6 @@ export function QuickMint() {
 
     // Connect wallet using wagmi - opens wallet modal
     const connect = async () => {
-        // Find the first available connector (prioritize non-Injected for EIP-6963)
         const targetConnector = connectors.find(c => c.name !== 'Injected') || connectors[0];
         if (targetConnector) {
             try {
@@ -93,113 +98,180 @@ export function QuickMint() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
-    // Load contract data
+    // Refs for periodic refresh
+    const refreshIntervalRef = useRef(null);
+
+    // Load contract data with retry
     useEffect(() => {
         loadContractData();
+
+        // Set up periodic refresh every 15 seconds for the counter
+        refreshIntervalRef.current = setInterval(() => {
+            loadContractData(true); // silent refresh
+        }, 15000);
+
+        return () => {
+            if (refreshIntervalRef.current) {
+                clearInterval(refreshIntervalRef.current);
+            }
+        };
     }, [account]);
 
-    const loadContractData = async () => {
+    const loadContractData = async (silent = false) => {
         try {
-            const rpcProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
+            const data = await retryContractCall(async (provider) => {
+                // Check if contract still exists on-chain
+                const code = await provider.getCode(CONTRACTS.QUICKMINT);
+                if (!code || code === '0x') {
+                    throw new Error('CONTRACT_NOT_FOUND');
+                }
 
-            // Check if contract still exists on-chain
-            const code = await rpcProvider.getCode(CONTRACTS.QUICKMINT);
-            if (!code || code === '0x') {
-                console.error('⚠️ QuickMint contract not found! Testnet may have been reset.');
-                setError('⚠️ Contract not found on Arc Testnet. The testnet may have been reset and the contract needs to be redeployed.');
-                return;
-            }
+                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
 
-            const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, rpcProvider);
+                const [price, minted] = await Promise.all([
+                    contract.mintPrice(),
+                    contract.totalMinted()
+                ]);
 
-            const price = await contract.mintPrice();
-            setMintPrice(formatUSDC(price));
+                return { price, minted };
+            });
 
-            const minted = await contract.totalMinted();
-            setTotalMinted(Number(minted));
+            setMintPrice(formatUSDC(data.price));
+            setTotalMinted(Number(data.minted));
 
             // Clear any previous errors since data loaded successfully
-            setError('');
+            if (!silent) setError('');
 
             if (account) {
-                await loadUserNFTs(contract);
+                await loadUserNFTs();
             }
         } catch (err) {
             console.error('Error loading contract data:', err);
-            if (err.code === 'CALL_EXCEPTION') {
-                setError('⚠️ Cannot connect to QuickMint contract. The RPC might be down or the contract may need redeployment.');
+            if (!silent) {
+                if (err.message === 'CONTRACT_NOT_FOUND') {
+                    setError('⚠️ Contract not found on Arc Testnet. The testnet may have been reset and the contract needs to be redeployed.');
+                } else if (err.code === 'CALL_EXCEPTION') {
+                    setError('⚠️ Cannot connect to QuickMint contract. The RPC might be down or the contract may need redeployment.');
+                } else {
+                    setError('⚠️ Failed to load contract data. Retrying...');
+                    // Auto-retry once more after 3s on initial load
+                    setTimeout(() => loadContractData(true), 3000);
+                }
             }
         }
     };
 
-    const loadUserNFTs = async (contract) => {
+    const loadUserNFTs = async () => {
         try {
-            const tokenIds = await contract.tokensOfOwner(account);
-            const nfts = [];
+            const nfts = await retryContractCall(async (provider) => {
+                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
+                const tokenIds = await contract.tokensOfOwner(account);
+                const results = [];
 
-            for (const tokenId of tokenIds) {
-                try {
-                    const [nftName, desc, img, creator, mintedAt] = await contract.getTokenMetadata(tokenId);
-                    nfts.push({
-                        tokenId: Number(tokenId),
-                        name: nftName,
-                        description: desc,
-                        image: img,
-                        creator,
-                        mintedAt: Number(mintedAt)
-                    });
-                } catch (e) {
-                    console.error('Error loading NFT:', tokenId, e);
+                for (const tokenId of tokenIds) {
+                    try {
+                        const [nftName, desc, img, creator, mintedAt] = await contract.getTokenMetadata(tokenId);
+                        results.push({
+                            tokenId: Number(tokenId),
+                            name: nftName,
+                            description: desc,
+                            image: img,
+                            creator,
+                            mintedAt: Number(mintedAt)
+                        });
+                    } catch (e) {
+                        console.error('Error loading NFT:', tokenId, e);
+                    }
                 }
-            }
+
+                return results;
+            });
 
             setUserNFTs(nfts.reverse());
         } catch (err) {
             console.error('Error loading user NFTs:', err);
         }
     };
-    // Pinata JWT for IPFS uploads
-    const PINATA_JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiJhZTBlZjA3NC0yN2NkLTQ3N2ItODY5OS1lNDE0YjEwNTNmMWIiLCJlbWFpbCI6ImNpaGF0dm9vbGthbjc0ODBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6IjFjNmU4MDFiN2UzY2FiMDE1MDA3Iiwic2NvcGVkS2V5U2VjcmV0IjoiOThhYTAxYjljYzQyYzQ1YTFmMWIxMjUyNGMyMWI5NmY4MDQ5N2Q0NDM1Mjc1ZTAyNDY2MGRlMjJkY2M0NjFlMyIsImV4cCI6MTgwMDA4MTIwNn0.xPla8yo0qOnGzhCbCv9hwd5sQck755K3nlCLxOTSw1s';
 
-    // Upload to Pinata IPFS
+    /**
+     * Upload to Pinata IPFS with retry logic and exponential backoff.
+     * Tries up to 3 times with increasing delays.
+     * Falls back to high-quality base64 only as absolute last resort.
+     */
     const uploadToIPFS = async (file) => {
         console.log('📤 Uploading to Pinata IPFS...');
 
-        try {
-            const formData = new FormData();
-            formData.append('file', file);
+        const jwtTokens = [PINATA_JWT, PINATA_JWT_BACKUP].filter(Boolean);
+        // Remove duplicates
+        const uniqueJWTs = [...new Set(jwtTokens)];
 
-            const metadata = JSON.stringify({
-                name: `ArcGenesis-${Date.now()}`
-            });
-            formData.append('pinataMetadata', metadata);
+        for (const jwt of uniqueJWTs) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    // Exponential backoff: 0s, 2s, 5s
+                    if (attempt > 0) {
+                        const delay = attempt === 1 ? 2000 : 5000;
+                        console.log(`⏳ Retry ${attempt + 1}/3 after ${delay}ms...`);
+                        await new Promise(r => setTimeout(r, delay));
+                    }
 
-            const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${PINATA_JWT}`
-                },
-                body: formData
-            });
+                    const formData = new FormData();
+                    formData.append('file', file);
 
-            if (!response.ok) {
-                throw new Error(`Pinata upload failed: ${response.status}`);
+                    const metadata = JSON.stringify({
+                        name: `ArcGenesis-${Date.now()}`
+                    });
+                    formData.append('pinataMetadata', metadata);
+
+                    // Use AbortController for timeout
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+                    const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${jwt}`
+                        },
+                        body: formData,
+                        signal: controller.signal
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (response.status === 429) {
+                        // Rate limited — wait longer and retry
+                        console.warn('⚠️ Pinata rate limited, waiting 10s...');
+                        await new Promise(r => setTimeout(r, 10000));
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`Pinata upload failed: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`;
+                    console.log('✅ IPFS URL:', ipfsUrl);
+                    return ipfsUrl;
+
+                } catch (err) {
+                    console.error(`IPFS upload attempt ${attempt + 1} failed:`, err.message);
+                    if (err.name === 'AbortError') {
+                        console.warn('⚠️ Upload timed out');
+                    }
+                }
             }
-
-            const result = await response.json();
-            const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`;
-            console.log('✅ IPFS URL:', ipfsUrl);
-            return ipfsUrl;
-
-        } catch (err) {
-            console.error('IPFS upload error:', err);
-            // Fallback to small base64 if IPFS fails
-            console.log('⚠️ Falling back to base64...');
-            return createBase64Fallback(file);
         }
+
+        // ALL retries with ALL JWT tokens failed — use high-quality fallback
+        console.warn('⚠️ All IPFS upload attempts failed. Using high-quality base64 fallback...');
+        return createBase64Fallback(file);
     };
 
-    // Fallback base64 for when IPFS is unavailable
+    /**
+     * High-quality base64 fallback for when IPFS is completely unavailable.
+     * Uses 512x512 max resolution and 0.85 JPEG quality to preserve detail.
+     */
     const createBase64Fallback = (file) => {
         return new Promise((resolve) => {
             const reader = new FileReader();
@@ -207,18 +279,69 @@ export function QuickMint() {
                 const img = new Image();
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
-                    const maxSize = 128;
+                    // Use 512px as max dimension for much better quality
+                    const maxSize = 512;
                     let { width, height } = img;
+
+                    // Only downscale if larger than maxSize
                     if (width > maxSize || height > maxSize) {
                         const ratio = Math.min(maxSize / width, maxSize / height);
                         width = Math.round(width * ratio);
                         height = Math.round(height * ratio);
                     }
+
                     canvas.width = width;
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
+
+                    // Use better image smoothing for quality
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
                     ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.65));
+
+                    // Use high JPEG quality (0.85) for much better results
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+                    // Check if the data URL is reasonably sized for on-chain storage
+                    // If it's too large (>24KB), reduce quality progressively
+                    if (dataUrl.length > 24000) {
+                        console.warn(`⚠️ Base64 too large (${dataUrl.length}), reducing quality...`);
+                        // Try reducing to 384px at 0.75 quality
+                        const maxSize2 = 384;
+                        let w2 = img.width, h2 = img.height;
+                        if (w2 > maxSize2 || h2 > maxSize2) {
+                            const ratio2 = Math.min(maxSize2 / w2, maxSize2 / h2);
+                            w2 = Math.round(w2 * ratio2);
+                            h2 = Math.round(h2 * ratio2);
+                        }
+                        canvas.width = w2;
+                        canvas.height = h2;
+                        ctx.imageSmoothingEnabled = true;
+                        ctx.imageSmoothingQuality = 'high';
+                        ctx.drawImage(img, 0, 0, w2, h2);
+                        const dataUrl2 = canvas.toDataURL('image/jpeg', 0.75);
+
+                        if (dataUrl2.length > 24000) {
+                            // Final fallback: 256px at 0.65
+                            const maxSize3 = 256;
+                            let w3 = img.width, h3 = img.height;
+                            if (w3 > maxSize3 || h3 > maxSize3) {
+                                const ratio3 = Math.min(maxSize3 / w3, maxSize3 / h3);
+                                w3 = Math.round(w3 * ratio3);
+                                h3 = Math.round(h3 * ratio3);
+                            }
+                            canvas.width = w3;
+                            canvas.height = h3;
+                            ctx.imageSmoothingEnabled = true;
+                            ctx.imageSmoothingQuality = 'high';
+                            ctx.drawImage(img, 0, 0, w3, h3);
+                            resolve(canvas.toDataURL('image/jpeg', 0.65));
+                        } else {
+                            resolve(dataUrl2);
+                        }
+                    } else {
+                        resolve(dataUrl);
+                    }
                 };
                 img.src = e.target.result;
             };
@@ -251,7 +374,7 @@ export function QuickMint() {
             reader.onload = (e) => setImagePreview(e.target.result);
             reader.readAsDataURL(file);
 
-            // Upload to IPFS (or create thumbnail)
+            // Upload to IPFS (with retry) or create high-quality fallback
             const url = await uploadToIPFS(file);
             setImageUrl(url);
             console.log('Image URL ready, length:', url.length);
@@ -345,9 +468,14 @@ export function QuickMint() {
             console.log('Signer:', signerAddress);
             console.log('Contract:', CONTRACTS.QUICKMINT);
 
-            // === STEP 3: Verify contract exists (via JsonRpcProvider — works fine) ===
-            const rpcProvider = new ethers.JsonRpcProvider(ARC_TESTNET.rpcUrl);
-            const contractCode = await rpcProvider.getCode(CONTRACTS.QUICKMINT);
+            // === STEP 3: Verify contract exists (via retryContractCall) ===
+            const { contractCode, price, rpcProvider } = await retryContractCall(async (provider) => {
+                const code = await provider.getCode(CONTRACTS.QUICKMINT);
+                const contract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, provider);
+                const p = await contract.mintPrice();
+                return { contractCode: code, price: p, rpcProvider: provider };
+            });
+
             console.log('Contract code length:', contractCode.length);
 
             if (!contractCode || contractCode === '0x') {
@@ -357,9 +485,7 @@ export function QuickMint() {
                 );
             }
 
-            // === STEP 4: Get mint price (via JsonRpcProvider — works fine) ===
-            const rpcContract = new ethers.Contract(CONTRACTS.QUICKMINT, QUICKMINT_ABI, rpcProvider);
-            const price = await rpcContract.mintPrice();
+            // === STEP 4: Use already-fetched price ===
             console.log('Price:', price.toString());
 
             // === STEP 5: Check balance via raw RPC ===
@@ -404,11 +530,17 @@ export function QuickMint() {
             console.log('TX sent:', txHash);
             setSuccess(`Transaction sent! Confirming... TX: ${txHash.slice(0, 10)}...`);
 
-            // === STEP 7: Wait for receipt (via JsonRpcProvider) ===
+            // === STEP 7: Wait for receipt (via retryContractCall for resilient polling) ===
             let receipt = null;
             for (let i = 0; i < 60; i++) {
                 await new Promise(r => setTimeout(r, 3000));
-                receipt = await rpcProvider.getTransactionReceipt(txHash);
+                try {
+                    receipt = await retryContractCall(async (provider) => {
+                        return await provider.getTransactionReceipt(txHash);
+                    }, 1);
+                } catch (e) {
+                    // Ignore individual poll failures
+                }
                 if (receipt) break;
                 console.log(`Waiting... (${i + 1})`);
             }
@@ -516,7 +648,7 @@ export function QuickMint() {
                         </div>
 
                         {isUploading && (
-                            <div className="upload-status">Processing image...</div>
+                            <div className="upload-status">Uploading to IPFS...</div>
                         )}
 
                         {/* Name Input */}
@@ -566,7 +698,7 @@ export function QuickMint() {
                             disabled={isMinting || isUploading}
                         >
                             {!isConnected ? 'Connect Wallet' :
-                                isUploading ? 'Processing...' :
+                                isUploading ? 'Uploading to IPFS...' :
                                     isMinting ? 'Minting...' :
                                         `Mint for ${mintPrice} USDC`}
                         </button>

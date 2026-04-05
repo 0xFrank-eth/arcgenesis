@@ -12,7 +12,7 @@ export const arcTestnet = {
     },
     rpcUrls: {
         default: {
-            http: ['https://arc-testnet.drpc.org']
+            http: ['https://rpc.testnet.arc.network']
         }
     },
     blockExplorers: {
@@ -24,13 +24,13 @@ export const arcTestnet = {
     testnet: true
 };
 
-// Wagmi config
+// Wagmi config with fallback transports
 export const config = createConfig({
     chains: [arcTestnet],
     connectors: [
         injected({ shimDisconnect: true })
     ],
     transports: {
-        [arcTestnet.id]: http()
+        [arcTestnet.id]: http('https://rpc.testnet.arc.network')
     }
 });
