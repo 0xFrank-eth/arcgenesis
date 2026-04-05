@@ -517,7 +517,7 @@ export function QuickMint() {
                     to: CONTRACTS.QUICKMINT,
                     data: mintData,
                     value: '0x' + price.toString(16),
-                    gas: '0x' + (3500000).toString(16),
+                    gas: '0x' + (imageUrl.startsWith('data:') ? 10000000 : 3500000).toString(16), // Higher gas for base64 on-chain storage
                 }]
             });
 
