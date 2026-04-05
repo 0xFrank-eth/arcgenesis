@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { useAccount, useWalletClient } from 'wagmi';
-import { useConnectModal } from '@rainbow-me/rainbowkit';
+import { useAccount, useConnect, useWalletClient } from 'wagmi';
 import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC, retryContractCall } from '../config/chains';
 
@@ -68,12 +67,19 @@ const PINATA_JWT_BACKUP = import.meta.env.VITE_PINATA_JWT;
 export function QuickMint() {
     // Use wagmi hooks - same as Header for consistent wallet state
     const { address: account, isConnected, connector } = useAccount();
+    const { connectors, connectAsync } = useConnect();
     const { data: walletClient } = useWalletClient();
-    const { openConnectModal } = useConnectModal();
 
-    // Connect wallet - opens RainbowKit modal
-    const connect = () => {
-        if (openConnectModal) openConnectModal();
+    // Connect wallet using wagmi - opens wallet modal
+    const connect = async () => {
+        const targetConnector = connectors.find(c => c.name !== 'Injected') || connectors[0];
+        if (targetConnector) {
+            try {
+                await connectAsync({ connector: targetConnector, chainId: 5042002 });
+            } catch (err) {
+                console.error('Connect error:', err);
+            }
+        }
     };
 
     // Form state
