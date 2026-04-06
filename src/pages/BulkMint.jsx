@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { useAccount, useConnect, useWalletClient } from 'wagmi';
+import { useAccount, useWalletClient } from 'wagmi';
+import { useConnectModal } from '@rainbow-me/rainbowkit';
 import { ethers } from 'ethers';
 import { CONTRACTS, ARC_TESTNET, formatUSDC, retryContractCall } from '../config/chains';
 
@@ -16,18 +17,11 @@ const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || 'eyJhbGciOiJIUzI1NiIsInR5c
 
 export function BulkMint() {
     const { address: account, isConnected, connector } = useAccount();
-    const { connectors, connectAsync } = useConnect();
     const { data: walletClient } = useWalletClient();
+    const { openConnectModal } = useConnectModal();
 
-    const connect = async () => {
-        const targetConnector = connectors.find(c => c.name !== 'Injected') || connectors[0];
-        if (targetConnector) {
-            try {
-                await connectAsync({ connector: targetConnector, chainId: 5042002 });
-            } catch (err) {
-                console.error('Connect error:', err);
-            }
-        }
+    const connect = () => {
+        if (openConnectModal) openConnectModal();
     };
 
     // Collection state
