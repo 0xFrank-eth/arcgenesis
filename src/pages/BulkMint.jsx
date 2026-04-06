@@ -468,7 +468,7 @@ export function BulkMint() {
                         >
                             {!isConnected ? 'Connect Wallet' :
                                 isMinting ? `Minting ${mintProgress.current}/${mintProgress.total}...` :
-                                    `⚡ Mint ${images.length} NFTs (Free + Gas)`}
+                                    `Mint ${images.length} NFTs`}
                         </button>
                     </div>
                 </div>

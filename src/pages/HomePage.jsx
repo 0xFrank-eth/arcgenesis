@@ -182,7 +182,7 @@ export function HomePage() {
                             <div className="stat-label">NFTs Minted</div>
                         </div>
                         <div className="stat-card">
-                            <div className="stat-icon">🆓</div>
+                            <div className="stat-icon">💎</div>
                             <div className="stat-value">Free</div>
                             <div className="stat-label">Mint (Gas Only)</div>
                         </div>
