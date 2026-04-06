@@ -295,7 +295,7 @@ export function BulkMint() {
                             to: CONTRACTS.QUICKMINT,
                             data: mintData,
                             value: '0x' + price.toString(16),
-                            gas: '0x' + (img.ipfsUrl.startsWith('data:') ? 10000000 : 3500000).toString(16), // Higher gas for base64
+                            gas: '0x' + (img.ipfsUrl.startsWith('data:') ? 20000000 : 3500000).toString(16), // 20M gas for base64
                         }]
                     });
 

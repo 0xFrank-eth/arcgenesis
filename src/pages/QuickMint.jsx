@@ -265,6 +265,7 @@ export function QuickMint() {
 
         // ALL retries with ALL JWT tokens failed — use high-quality fallback
         console.warn('⚠️ All IPFS upload attempts failed. Using high-quality base64 fallback...');
+        // Warn: this will cost more gas since the image data is stored on-chain
         return createBase64Fallback(file);
     };
 
@@ -523,7 +524,7 @@ export function QuickMint() {
                     to: CONTRACTS.QUICKMINT,
                     data: mintData,
                     value: '0x' + price.toString(16),
-                    gas: '0x' + (imageUrl.startsWith('data:') ? 10000000 : 3500000).toString(16), // Higher gas for base64 on-chain storage
+                    gas: '0x' + (imageUrl.startsWith('data:') ? 20000000 : 3500000).toString(16), // 20M gas for base64, 3.5M for IPFS
                 }]
             });
 
