@@ -695,7 +695,7 @@ export function QuickMint() {
                             {!isConnected ? 'Connect Wallet' :
                                 isUploading ? 'Uploading to IPFS...' :
                                     isMinting ? 'Minting...' :
-                                        `Mint for ${mintPrice} USDC`}
+                                        '⚡ Mint NFT (Free + Gas)'}
                         </button>
                     </div>
 
